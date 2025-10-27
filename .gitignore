@@ -1,0 +1,55 @@
+# Build directories
+/build/
+/out/
+/bin/
+/lib/
+
+# CMake files
+/CMakeFiles/
+/CMakeCache.txt
+cmake_install.cmake
+CMakeScripts/
+*.ninja
+install_manifest.txt
+
+# Compiled files
+*.o
+*.obj
+*.exe
+*.dll
+*.so
+*.dylib
+*.a
+*.lib
+*.out
+*.app
+
+# Debug files
+*.pdb
+*.ilk
+*.dSYM/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Visual Studio files
+*.vcxproj*
+*.sln
+*.user
+*.aps
+*.pch
+*.vspscc
+*.vssscc
+.vs/
+
+# Shader compiled files
+*.cso
+
+# vcpkg
+/vcpkg_installed/
