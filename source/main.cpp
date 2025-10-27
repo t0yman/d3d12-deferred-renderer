@@ -2,6 +2,7 @@
 #include <stdexcept>
 
 #include <d3d12.h>
+#include <d3dcompiler.h>
 #include <dxgi1_6.h>
 
 #define GLFW_EXPOSE_NATIVE_WIN32
@@ -13,6 +14,12 @@
 #include <wrl/client.h>
 
 using namespace DirectX;
+
+struct Vertex
+{
+    float position[3];
+    float color[4];
+};
 
 int main()
 {
@@ -50,6 +57,62 @@ int main()
         // represents GPU
         ID3D12Device* device;
         D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device));
+
+        // compile vertex shader
+        ID3DBlob* vertexShaderBlob;
+        ID3DBlob* errorBlob;
+        HRESULT hResult = D3DCompileFromFile(L"../assets/shaders/triangle.hlsl", nullptr, nullptr, "VSMain", "vs_5_0", D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION, 0, &vertexShaderBlob, &errorBlob);
+        if (FAILED(hResult))
+        {
+            if (errorBlob != nullptr)
+            {
+                std::cerr << (char*)(errorBlob->GetBufferPointer()) << std::endl;
+            }
+            throw std::runtime_error{"Failed to compile vertex shader"};
+        }
+
+        // compile pixel shader
+        ID3D10Blob* pixelShaderBlob;
+        hResult = D3DCompileFromFile(L"../assets/shaders/triangle.hlsl", nullptr, nullptr, "PSMain", "ps_5_0", D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION, 0, &pixelShaderBlob, &errorBlob);
+        if (FAILED(hResult))
+        {
+            if (errorBlob != nullptr)
+            {
+                std::cerr << (char*)(errorBlob->GetBufferPointer()) << std::endl;
+            }
+            throw std::runtime_error{"Failed to compile pixel shader"};
+        }
+
+        // create root signature
+        D3D12_ROOT_SIGNATURE_DESC rootSignatureDesc{};
+        rootSignatureDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+        ID3DBlob* rootSignatureBlob;
+        D3D12SerializeRootSignature(&rootSignatureDesc, D3D_ROOT_SIGNATURE_VERSION_1, &rootSignatureBlob, &errorBlob);
+        ID3D12RootSignature* rootSignature;
+        device->CreateRootSignature(0, rootSignatureBlob->GetBufferPointer(), rootSignatureBlob->GetBufferSize(), IID_PPV_ARGS(&rootSignature));
+
+        // create PSO
+        D3D12_INPUT_ELEMENT_DESC inputElementDescs[] = {
+            {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+            {"COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        };
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc{};
+        psoDesc.pRootSignature = rootSignature;
+        psoDesc.VS = {vertexShaderBlob->GetBufferPointer(), vertexShaderBlob->GetBufferSize()};
+        psoDesc.PS = {pixelShaderBlob->GetBufferPointer(), pixelShaderBlob->GetBufferSize()};
+        psoDesc.InputLayout = {inputElementDescs, 2};
+        psoDesc.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
+        psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+        psoDesc.RasterizerState.DepthClipEnable = TRUE;
+        psoDesc.BlendState.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+        psoDesc.DepthStencilState.DepthEnable = FALSE;
+        psoDesc.NumRenderTargets = 1;
+        psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+        psoDesc.SampleDesc.Count = 1;
+        psoDesc.SampleMask = UINT_MAX;
+        psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+        ID3D12PipelineState* pipelineState;
+        device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&pipelineState));
 
         // create command queue
         // represents the GPU's work queue. Commands are submitted here, and the GPU executes them FIFO order.
@@ -115,6 +178,34 @@ int main()
         UINT64 fenceValue = 0;
         HANDLE fenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
 
+        Vertex vertices[] = {
+            {{0.0f, 0.5f, 0.0f}, {1.0f, 0.0f, 0.0f, 1.0f}},
+            {{0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f, 1.0f}},
+            {{-0.5f, -0.5f, 0.0f}, {0.0f, 0.0f, 1.0f, 1.0f}},
+        };
+
+        // create vertex buffer
+        D3D12_HEAP_PROPERTIES heapProps{};
+        heapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
+        D3D12_RESOURCE_DESC resourceDesc{};
+        resourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        resourceDesc.Width = sizeof(vertices);
+        resourceDesc.Height = 1;
+        resourceDesc.DepthOrArraySize = 1;
+        resourceDesc.MipLevels = 1;
+        resourceDesc.SampleDesc.Count = 1;
+        resourceDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        ID3D12Resource* vertexBuffer;
+        device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE, &resourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&vertexBuffer));
+        void* vertexData;
+        vertexBuffer->Map(0, nullptr, &vertexData);
+        std::memcpy(vertexData, vertices, sizeof(vertices));
+        vertexBuffer->Unmap(0, nullptr);
+        D3D12_VERTEX_BUFFER_VIEW vertexBufferView{};
+        vertexBufferView.BufferLocation = vertexBuffer->GetGPUVirtualAddress();
+        vertexBufferView.StrideInBytes = sizeof(Vertex);
+        vertexBufferView.SizeInBytes = sizeof(vertices);
+
         while (!glfwWindowShouldClose(window))
         {
             glfwPollEvents();
@@ -140,6 +231,17 @@ int main()
             rtvHandle.ptr += frameIndex * rtvDescriptorSize;
             float clearColor[] = {0.39f, 0.58f, 0.93f, 1.0f};
             commandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
+
+            commandList->SetPipelineState(pipelineState);
+            commandList->SetGraphicsRootSignature(rootSignature);
+            commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            D3D12_VIEWPORT viewport{0.0f, 0.0f, static_cast<float>(windowWidth), static_cast<float>(windowHeight), 0.0f, 1.0f};
+            RECT scissorRect{0, 0, windowWidth, windowHeight};
+            commandList->RSSetViewports(1, &viewport);
+            commandList->RSSetScissorRects(1, &scissorRect);
+            commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
+            commandList->IASetVertexBuffers(0, 1, &vertexBufferView);
+            commandList->DrawInstanced(3, 1, 0, 0);
 
             // transition to present buffer
             barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
