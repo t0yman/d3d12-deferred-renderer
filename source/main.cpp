@@ -18,7 +18,7 @@ using namespace DirectX;
 struct Vertex
 {
     float position[3];
-    float color[4];
+    float normal[3];
 };
 
 struct ConstantBuffer
@@ -295,7 +295,7 @@ int main()
             static float rotation = 0.0f;
             rotation += 0.01f;
             XMMATRIX model = XMMatrixRotationY(rotation) * XMMatrixTranslation(0.0f, 0.0f, 4.0f);
-            XMMATRIX view = XMMatrixLookToLH(
+            XMMATRIX view = XMMatrixLookAtLH(
                 XMVectorSet(0.0f, 1.0f, -3.0f, 1.0f),
                 XMVectorSet(0.0f, 0.0f, 4.0f, 1.0f),
                 XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f)
