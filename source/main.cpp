@@ -21,6 +21,13 @@ struct Vertex
     float color[4];
 };
 
+struct ConstantBuffer
+{
+    XMMATRIX model;
+    XMMATRIX view;
+    XMMATRIX projection;
+};
+
 int main()
 {
 
@@ -61,7 +68,7 @@ int main()
         // compile vertex shader
         ID3DBlob* vertexShaderBlob;
         ID3DBlob* errorBlob;
-        HRESULT hResult = D3DCompileFromFile(L"../assets/shaders/triangle.hlsl", nullptr, nullptr, "VSMain", "vs_5_0", D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION, 0, &vertexShaderBlob, &errorBlob);
+        HRESULT hResult = D3DCompileFromFile(L"../assets/shaders/cube.hlsl", nullptr, nullptr, "VSMain", "vs_5_0", D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION, 0, &vertexShaderBlob, &errorBlob);
         if (FAILED(hResult))
         {
             if (errorBlob != nullptr)
@@ -73,7 +80,7 @@ int main()
 
         // compile pixel shader
         ID3D10Blob* pixelShaderBlob;
-        hResult = D3DCompileFromFile(L"../assets/shaders/triangle.hlsl", nullptr, nullptr, "PSMain", "ps_5_0", D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION, 0, &pixelShaderBlob, &errorBlob);
+        hResult = D3DCompileFromFile(L"../assets/shaders/cube.hlsl", nullptr, nullptr, "PSMain", "ps_5_0", D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION, 0, &pixelShaderBlob, &errorBlob);
         if (FAILED(hResult))
         {
             if (errorBlob != nullptr)
@@ -84,7 +91,15 @@ int main()
         }
 
         // create root signature
+        // configure root signature with constant buffer parameter
+        D3D12_ROOT_PARAMETER rootParameter{};
+        rootParameter.ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+        rootParameter.Descriptor.ShaderRegister = 0;  // b0
+        rootParameter.Descriptor.RegisterSpace = 0;
+        rootParameter.ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
         D3D12_ROOT_SIGNATURE_DESC rootSignatureDesc{};
+        rootSignatureDesc.NumParameters = 1;
+        rootSignatureDesc.pParameters = &rootParameter;
         rootSignatureDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
         ID3DBlob* rootSignatureBlob;
         D3D12SerializeRootSignature(&rootSignatureDesc, D3D_ROOT_SIGNATURE_VERSION_1, &rootSignatureBlob, &errorBlob);
@@ -94,7 +109,7 @@ int main()
         // create PSO
         D3D12_INPUT_ELEMENT_DESC inputElementDescs[] = {
             {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
-            {"COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+            {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
         };
         D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc{};
         psoDesc.pRootSignature = rootSignature;
@@ -179,9 +194,44 @@ int main()
         HANDLE fenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
 
         Vertex vertices[] = {
-            {{0.0f, 0.5f, 0.0f}, {1.0f, 0.0f, 0.0f, 1.0f}},
-            {{0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f, 1.0f}},
-            {{-0.5f, -0.5f, 0.0f}, {0.0f, 0.0f, 1.0f, 1.0f}},
+            // Front face
+            {{-0.5f, -0.5f,  0.5f}, {0.0f, 0.0f, 1.0f}},
+            {{ 0.5f, -0.5f,  0.5f}, {0.0f, 0.0f, 1.0f}},
+            {{ 0.5f,  0.5f,  0.5f}, {0.0f, 0.0f, 1.0f}},
+            {{-0.5f,  0.5f,  0.5f}, {0.0f, 0.0f, 1.0f}},
+            // Back face
+            {{ 0.5f, -0.5f, -0.5f}, {0.0f, 0.0f, -1.0f}},
+            {{-0.5f, -0.5f, -0.5f}, {0.0f, 0.0f, -1.0f}},
+            {{-0.5f,  0.5f, -0.5f}, {0.0f, 0.0f, -1.0f}},
+            {{ 0.5f,  0.5f, -0.5f}, {0.0f, 0.0f, -1.0f}},
+            // Top face
+            {{-0.5f,  0.5f,  0.5f}, {0.0f, 1.0f, 0.0f}},
+            {{ 0.5f,  0.5f,  0.5f}, {0.0f, 1.0f, 0.0f}},
+            {{ 0.5f,  0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
+            {{-0.5f,  0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
+            // Bottom face
+            {{-0.5f, -0.5f, -0.5f}, {0.0f, -1.0f, 0.0f}},
+            {{ 0.5f, -0.5f, -0.5f}, {0.0f, -1.0f, 0.0f}},
+            {{ 0.5f, -0.5f,  0.5f}, {0.0f, -1.0f, 0.0f}},
+            {{-0.5f, -0.5f,  0.5f}, {0.0f, -1.0f, 0.0f}},
+            // Right face
+            {{ 0.5f, -0.5f,  0.5f}, {1.0f, 0.0f, 0.0f}},
+            {{ 0.5f, -0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+            {{ 0.5f,  0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+            {{ 0.5f,  0.5f,  0.5f}, {1.0f, 0.0f, 0.0f}},
+            // Left face
+            {{-0.5f, -0.5f, -0.5f}, {-1.0f, 0.0f, 0.0f}},
+            {{-0.5f, -0.5f,  0.5f}, {-1.0f, 0.0f, 0.0f}},
+            {{-0.5f,  0.5f,  0.5f}, {-1.0f, 0.0f, 0.0f}},
+            {{-0.5f,  0.5f, -0.5f}, {-1.0f, 0.0f, 0.0f}},
+        };
+        std::uint16_t indices[] = {
+            0,1,2, 0,2,3,       // Front
+            4,5,6, 4,6,7,       // Back
+            8,9,10, 8,10,11,    // Top
+            12,13,14, 12,14,15, // Bottom
+            16,17,18, 16,18,19, // Right
+            20,21,22, 20,22,23  // Left
         };
 
         // create vertex buffer
@@ -206,13 +256,67 @@ int main()
         vertexBufferView.StrideInBytes = sizeof(Vertex);
         vertexBufferView.SizeInBytes = sizeof(vertices);
 
+        // create index buffer
+        resourceDesc.Width = sizeof(indices);
+        ID3D12Resource* indexBuffer;
+        device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE, &resourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&indexBuffer));
+        void* indexData;
+        indexBuffer->Map(0, nullptr, &indexData);
+        std::memcpy(indexData, &indices, sizeof(indices));
+        indexBuffer->Unmap(0, nullptr);
+        D3D12_INDEX_BUFFER_VIEW indexBufferView{};
+        indexBufferView.BufferLocation = indexBuffer->GetGPUVirtualAddress();
+        indexBufferView.SizeInBytes = sizeof(indices);
+        indexBufferView.Format = DXGI_FORMAT_R16_UINT;
+
+        // create constant buffer (think of it as uniform variable we are planning on uploading to the shader)
+        D3D12_HEAP_PROPERTIES constantBufferProps{};
+        constantBufferProps.Type = D3D12_HEAP_TYPE_UPLOAD;
+        D3D12_RESOURCE_DESC constantBufferResourceDesc{};
+        constantBufferResourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        constantBufferResourceDesc.Width = (sizeof(ConstantBuffer) + 255) & ~255;
+        constantBufferResourceDesc.Height = 1;
+        constantBufferResourceDesc.DepthOrArraySize = 1;
+        constantBufferResourceDesc.MipLevels = 1;
+        constantBufferResourceDesc.SampleDesc.Count = 1;
+        constantBufferResourceDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        ID3D12Resource* constantBuffer;
+        device->CreateCommittedResource(&constantBufferProps, D3D12_HEAP_FLAG_NONE, &constantBufferResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&constantBuffer));
+
         while (!glfwWindowShouldClose(window))
         {
             glfwPollEvents();
 
-            // reset allocator and command list
+            // resent allocator and command list
             commandAllocator->Reset();
             commandList->Reset(commandAllocator, nullptr);
+
+            // calculate MVP matrices
+            static float rotation = 0.0f;
+            rotation += 0.01f;
+            XMMATRIX model = XMMatrixRotationY(rotation) * XMMatrixTranslation(0.0f, 0.0f, 4.0f);
+            XMMATRIX view = XMMatrixLookToLH(
+                XMVectorSet(0.0f, 1.0f, -3.0f, 1.0f),
+                XMVectorSet(0.0f, 0.0f, 4.0f, 1.0f),
+                XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f)
+            );
+            XMMATRIX projection = XMMatrixPerspectiveFovLH(
+                XM_PIDIV4,
+                static_cast<float>(windowWidth) / static_cast<float>(windowHeight),
+                0.1f,
+                100.0f
+            );
+
+            // update constant buffer with transposed matrices
+            // HLSL expects matrices in column-major ordering
+            ConstantBuffer currentFrameConstantBuffer;
+            currentFrameConstantBuffer.model = XMMatrixTranspose(model);
+            currentFrameConstantBuffer.view = XMMatrixTranspose(view);
+            currentFrameConstantBuffer.projection = XMMatrixTranspose(projection);
+            void* constantBufferData;
+            constantBuffer->Map(0, nullptr, &constantBufferData);
+            std::memcpy(constantBufferData, &currentFrameConstantBuffer, sizeof(currentFrameConstantBuffer));
+            constantBuffer->Unmap(0, nullptr);
 
             // get current back buffer
             UINT frameIndex = swapChain->GetCurrentBackBufferIndex();
@@ -232,8 +336,10 @@ int main()
             float clearColor[] = {0.39f, 0.58f, 0.93f, 1.0f};
             commandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
 
+            // set pipeline and draw
             commandList->SetPipelineState(pipelineState);
             commandList->SetGraphicsRootSignature(rootSignature);
+            commandList->SetGraphicsRootConstantBufferView(0, constantBuffer->GetGPUVirtualAddress());
             commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             D3D12_VIEWPORT viewport{0.0f, 0.0f, static_cast<float>(windowWidth), static_cast<float>(windowHeight), 0.0f, 1.0f};
             RECT scissorRect{0, 0, windowWidth, windowHeight};
@@ -241,7 +347,8 @@ int main()
             commandList->RSSetScissorRects(1, &scissorRect);
             commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
             commandList->IASetVertexBuffers(0, 1, &vertexBufferView);
-            commandList->DrawInstanced(3, 1, 0, 0);
+            commandList->IASetIndexBuffer(&indexBufferView);
+            commandList->DrawIndexedInstanced(36, 1, 0, 0, 0);
 
             // transition to present buffer
             barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
