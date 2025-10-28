@@ -178,7 +178,7 @@ int main()
         }
         // maintain a single fence + per-frame fence values
         Microsoft::WRL::ComPtr<ID3D12Fence> fence;
-        UINT64 fenceValues[kNumFrames];
+        UINT64 fenceValues[kNumFrames] = {};
         UINT64 currentFrameFenceValue = 0;
         HANDLE currentFrameFenceEvent = nullptr;
         device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(fence.GetAddressOf()));
@@ -307,7 +307,7 @@ int main()
         device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE, &resourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(vertexBuffer.GetAddressOf()));
         void* vertexData;
         vertexBuffer->Map(0, nullptr, &vertexData);
-        std::memcpy(vertexData, &vertices, sizeof(vertices));
+        std::memcpy(vertexData, vertices, sizeof(vertices));
         vertexBuffer->Unmap(0, nullptr);
         D3D12_VERTEX_BUFFER_VIEW vertexBufferView{};
         vertexBufferView.BufferLocation = vertexBuffer->GetGPUVirtualAddress();
@@ -320,7 +320,7 @@ int main()
         device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE, &resourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(indexBuffer.GetAddressOf()));
         void* indexData;
         indexBuffer->Map(0, nullptr, &indexData);
-        std::memcpy(indexData, &indices, sizeof(indices));
+        std::memcpy(indexData, indices, sizeof(indices));
         indexBuffer->Unmap(0, nullptr);
         D3D12_INDEX_BUFFER_VIEW indexBufferView{};
         indexBufferView.BufferLocation = indexBuffer->GetGPUVirtualAddress();
@@ -332,6 +332,13 @@ int main()
             glfwPollEvents();
 
             const UINT currentBackBufferIndex = swapChain->GetCurrentBackBufferIndex();
+            if (fence->GetCompletedValue() < fenceValues[currentBackBufferIndex])  // think fence->GetCompletedValue() == lastFrameNumberSuccessfulyRenderer
+            {
+                // being here means the last frame the GPU has finished rendering was not the current frame
+                // i.e. the current frame is still in the process of being renderered
+                fence->SetEventOnCompletion(fenceValues[currentBackBufferIndex], currentFrameFenceEvent);
+                WaitForSingleObject(currentFrameFenceEvent, INFINITE);
+            }
 
             // reset command allocator and command list
             commandAllocators[currentBackBufferIndex]->Reset();
@@ -405,13 +412,6 @@ int main()
             // wait for previous frame to finish rendering
             const UINT64 fenceValue = currentFrameFenceValue++;  // think fenceValue = currentFrameNumber
             commandQueue->Signal(fence.Get(), fenceValue);  // tell GPU to set fence = currentFrameNumber when the GPU is finished rendering the currently rendered frame
-            if (fence->GetCompletedValue() < fenceValue)  // think fence->GetCompletedValue() == lastFrameNumberSuccessfulyRenderer
-            {
-                // being here means the last frame the GPU has finished rendering was not the current frame
-                // i.e. the current frame is still in the process of being renderered
-                fence->SetEventOnCompletion(fenceValue, currentFrameFenceEvent);
-                WaitForSingleObject(currentFrameFenceEvent, INFINITE);
-            }
             fenceValues[currentBackBufferIndex] = fenceValue;
         }
 
