@@ -201,6 +201,7 @@ int main()
         for (UINT i = 0; i < kNumFrames; ++i)
         {
             device->CreateCommittedResource(&constantBufferHeapProps, D3D12_HEAP_FLAG_NONE, &constantBufferResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(constantBuffers[i].GetAddressOf()));
+            constantBuffers[i]->Map(0, nullptr, &(constantBuffersMappedMemory[i]));
         }
         // create render target views (RTV)
         // a desciptor is simply metadata that tells the GPU how to interpret a resource
@@ -358,9 +359,7 @@ int main()
             currentFrameConstantBuffer.model = XMMatrixTranspose(model);
             currentFrameConstantBuffer.view = XMMatrixTranspose(view);
             currentFrameConstantBuffer.projection = XMMatrixTranspose(projection);
-            constantBuffers[currentBackBufferIndex]->Map(0, nullptr, &(constantBuffersMappedMemory[currentBackBufferIndex]));
             std::memcpy(constantBuffersMappedMemory[currentBackBufferIndex], &currentFrameConstantBuffer, sizeof(currentFrameConstantBuffer));
-            constantBuffers[currentBackBufferIndex]->Unmap(0, nullptr);
 
             // transition to render target
             D3D12_RESOURCE_BARRIER barrier{};
@@ -403,10 +402,13 @@ int main()
             // present
             swapChain->Present(1, 0);
 
-            const UINT64 fenceValue = currentFrameFenceValue++;
-            commandQueue->Signal(fence.Get(), fenceValue);
-            if (fence->GetCompletedValue() < fenceValue)
+            // wait for previous frame to finish rendering
+            const UINT64 fenceValue = currentFrameFenceValue++;  // think fenceValue = currentFrameNumber
+            commandQueue->Signal(fence.Get(), fenceValue);  // tell GPU to set fence = currentFrameNumber when the GPU is finished rendering the currently rendered frame
+            if (fence->GetCompletedValue() < fenceValue)  // think fence->GetCompletedValue() == lastFrameNumberSuccessfulyRenderer
             {
+                // being here means the last frame the GPU has finished rendering was not the current frame
+                // i.e. the current frame is still in the process of being renderered
                 fence->SetEventOnCompletion(fenceValue, currentFrameFenceEvent);
                 WaitForSingleObject(currentFrameFenceEvent, INFINITE);
             }
