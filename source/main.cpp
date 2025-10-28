@@ -80,6 +80,7 @@ int main()
 
         // compile pixel shader
         Microsoft::WRL::ComPtr<ID3DBlob> pixelShaderBlob;
+        errorBlob.Reset();
         hResult = D3DCompileFromFile(L"../assets/shaders/cube.hlsl", nullptr, nullptr, "PSMain", "ps_5_0", D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION, 0, pixelShaderBlob.GetAddressOf(), errorBlob.GetAddressOf());
         if (FAILED(hResult))
         {
@@ -350,12 +351,12 @@ int main()
 
             // get current back buffer
             UINT frameIndex = swapChain->GetCurrentBackBufferIndex();
-            Microsoft::WRL::ComPtr<ID3D12Resource> backBuffer = renderTargets[frameIndex];
+            ID3D12Resource* backBuffer = renderTargets[frameIndex].Get();
 
             // transition to render target
             D3D12_RESOURCE_BARRIER barrier{};
             barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            barrier.Transition.pResource = backBuffer.Get();
+            barrier.Transition.pResource = backBuffer;
             barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
             barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
             commandList->ResourceBarrier(1, &barrier);
