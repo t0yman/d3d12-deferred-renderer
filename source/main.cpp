@@ -1,4 +1,5 @@
 #include <iostream>
+#include <exception>
 #include <stdexcept>
 
 #include <d3d12.h>
@@ -27,6 +28,14 @@ struct ConstantBuffer
     XMMATRIX view;
     XMMATRIX projection;
 };
+
+inline void ThrowIfFailed(HRESULT hr)
+{
+    if (FAILED(hr))
+    {
+        throw std::exception{};
+    }
+}
 
 int main()
 {
@@ -58,7 +67,9 @@ int main()
         // catches mistakes with detailed error messages
 #if defined(_DEBUG)
         Microsoft::WRL::ComPtr<ID3D12Debug> debugController;
-        if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(debugController.GetAddressOf()))))
+        HRESULT hResult = D3D12GetDebugInterface(IID_PPV_ARGS(debugController.GetAddressOf()));
+        ThrowIfFailed(hResult);
+        if (SUCCEEDED(hResult))
         {
             Microsoft::WRL::ComPtr<ID3D12Debug1> debugController1;
             if (SUCCEEDED(debugController.As(&debugController1)))
@@ -72,12 +83,13 @@ int main()
         // create device
         // represents GPU
         Microsoft::WRL::ComPtr<ID3D12Device> device;
-        D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(device.GetAddressOf()));
+        hResult = D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(device.GetAddressOf()));
+        ThrowIfFailed(hResult);
 
         // compile vertex shader
         Microsoft::WRL::ComPtr<ID3DBlob> vertexShaderBlob;
         Microsoft::WRL::ComPtr<ID3DBlob> errorBlob;
-        HRESULT hResult = D3DCompileFromFile(L"../assets/shaders/cube.hlsl", nullptr, nullptr, "VSMain", "vs_5_0", D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION, 0, vertexShaderBlob.GetAddressOf(), errorBlob.GetAddressOf());
+        hResult = D3DCompileFromFile(L"../assets/shaders/cube.hlsl", nullptr, nullptr, "VSMain", "vs_5_0", D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION, 0, vertexShaderBlob.GetAddressOf(), errorBlob.GetAddressOf());
         if (FAILED(hResult))
         {
             if (errorBlob != nullptr)
@@ -112,9 +124,11 @@ int main()
         rootSignatureDesc.pParameters = &rootParameter;
         rootSignatureDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
         Microsoft::WRL::ComPtr<ID3DBlob> rootSignatureBlob;
-        D3D12SerializeRootSignature(&rootSignatureDesc, D3D_ROOT_SIGNATURE_VERSION_1, rootSignatureBlob.GetAddressOf(), errorBlob.GetAddressOf());
+        hResult = D3D12SerializeRootSignature(&rootSignatureDesc, D3D_ROOT_SIGNATURE_VERSION_1, rootSignatureBlob.GetAddressOf(), errorBlob.GetAddressOf());
+        ThrowIfFailed(hResult);
         Microsoft::WRL::ComPtr<ID3D12RootSignature> rootSignature;
-        device->CreateRootSignature(0, rootSignatureBlob->GetBufferPointer(), rootSignatureBlob->GetBufferSize(), IID_PPV_ARGS(rootSignature.GetAddressOf()));
+        hResult = device->CreateRootSignature(0, rootSignatureBlob->GetBufferPointer(), rootSignatureBlob->GetBufferSize(), IID_PPV_ARGS(rootSignature.GetAddressOf()));
+        ThrowIfFailed(hResult);
 
         // create PSO
         D3D12_INPUT_ELEMENT_DESC inputElementDescs[] = {
@@ -127,7 +141,7 @@ int main()
         psoDesc.PS = {pixelShaderBlob->GetBufferPointer(), pixelShaderBlob->GetBufferSize()};
         psoDesc.InputLayout = {inputElementDescs, 2};
         psoDesc.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
-        psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+        psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_BACK;
         psoDesc.RasterizerState.DepthClipEnable = TRUE;
         psoDesc.BlendState.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
         psoDesc.DepthStencilState.DepthEnable = TRUE;
@@ -141,7 +155,8 @@ int main()
         psoDesc.SampleMask = UINT_MAX;
         psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
         Microsoft::WRL::ComPtr<ID3D12PipelineState> pipelineState;
-        device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(pipelineState.GetAddressOf()));
+        hResult = device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(pipelineState.GetAddressOf()));
+        ThrowIfFailed(hResult);
 
         // create command queue
         // represents the GPU's work queue. Commands are submitted here, and the GPU executes them FIFO order.
@@ -149,7 +164,8 @@ int main()
         commandQueueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
         commandQueueDesc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
         Microsoft::WRL::ComPtr<ID3D12CommandQueue> commandQueue;
-        device->CreateCommandQueue(&commandQueueDesc, IID_PPV_ARGS(commandQueue.GetAddressOf()));
+        hResult = device->CreateCommandQueue(&commandQueueDesc, IID_PPV_ARGS(commandQueue.GetAddressOf()));
+        ThrowIfFailed(hResult);
 
         // create swap chain
         // represents back buffers. manages the buffers you render to.
@@ -162,11 +178,14 @@ int main()
         swapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
         swapChainDesc.SampleDesc.Count = 1;
         Microsoft::WRL::ComPtr<IDXGIFactory2> factory;
-        CreateDXGIFactory1(IID_PPV_ARGS(factory.GetAddressOf()));
+        hResult = CreateDXGIFactory1(IID_PPV_ARGS(factory.GetAddressOf()));
+        ThrowIfFailed(hResult);
         Microsoft::WRL::ComPtr<IDXGISwapChain1> swapChain1;
-        factory->CreateSwapChainForHwnd(commandQueue.Get(), hWnd, &swapChainDesc, nullptr, nullptr, swapChain1.GetAddressOf());
+        hResult = factory->CreateSwapChainForHwnd(commandQueue.Get(), hWnd, &swapChainDesc, nullptr, nullptr, swapChain1.GetAddressOf());
+        ThrowIfFailed(hResult);
         Microsoft::WRL::ComPtr<IDXGISwapChain3> swapChain;
-        swapChain1.As(&swapChain);
+        hResult = swapChain1.As(&swapChain);
+        ThrowIfFailed(hResult);
 
         // setup per-frame resources
         // maintain one set of GPU recording state per swapchain buffer so the CPU can keep perparing frame N+1 while the GPU finishes frame N
@@ -177,16 +196,20 @@ int main()
         Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> commandLists[kNumFrames];
         for (UINT i = 0; i < kNumFrames; ++i)
         {
-            device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(commandAllocators[i].GetAddressOf()));
-            device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, commandAllocators[i].Get(), nullptr, IID_PPV_ARGS(commandLists[i].GetAddressOf()));
-            commandLists[i]->Close();
+            hResult = device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(commandAllocators[i].GetAddressOf()));
+            ThrowIfFailed(hResult);
+            hResult = device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, commandAllocators[i].Get(), nullptr, IID_PPV_ARGS(commandLists[i].GetAddressOf()));
+            ThrowIfFailed(hResult);
+            hResult = commandLists[i]->Close();
+            ThrowIfFailed(hResult);
         }
         // maintain a single fence + per-frame fence values
         Microsoft::WRL::ComPtr<ID3D12Fence> fence;
         UINT64 fenceValues[kNumFrames] = {};
         UINT64 currentFrameFenceValue = 0;
         HANDLE currentFrameFenceEvent = nullptr;
-        device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(fence.GetAddressOf()));
+        hResult = device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(fence.GetAddressOf()));
+        ThrowIfFailed(hResult);
         currentFrameFenceValue = 1;
         currentFrameFenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
         // maintain per-frame constant buffers (persistently mapped)
@@ -205,8 +228,10 @@ int main()
         constantBufferResourceDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
         for (UINT i = 0; i < kNumFrames; ++i)
         {
-            device->CreateCommittedResource(&constantBufferHeapProps, D3D12_HEAP_FLAG_NONE, &constantBufferResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(constantBuffers[i].GetAddressOf()));
-            constantBuffers[i]->Map(0, nullptr, &(constantBuffersMappedMemory[i]));
+            hResult = device->CreateCommittedResource(&constantBufferHeapProps, D3D12_HEAP_FLAG_NONE, &constantBufferResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(constantBuffers[i].GetAddressOf()));
+            ThrowIfFailed(hResult);
+            hResult = constantBuffers[i]->Map(0, nullptr, &(constantBuffersMappedMemory[i]));
+            ThrowIfFailed(hResult);
         }
         // create render target views (RTV)
         // a desciptor is simply metadata that tells the GPU how to interpret a resource
@@ -216,7 +241,8 @@ int main()
         rtvHeapDesc.NumDescriptors = kNumFrames;
         rtvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
         Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> rtvHeap;
-        device->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(rtvHeap.GetAddressOf()));
+        hResult = device->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(rtvHeap.GetAddressOf()));
+        ThrowIfFailed(hResult);
         // next create and maintain a descriptor for each back buffer
         UINT rtvDescriptorSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
         D3D12_CPU_DESCRIPTOR_HANDLE rtvHandles[kNumFrames];
@@ -224,7 +250,8 @@ int main()
         Microsoft::WRL::ComPtr<ID3D12Resource> renderTargets[kNumFrames];
         for (UINT i = 0; i < kNumFrames; ++i)
         {
-            swapChain->GetBuffer(i, IID_PPV_ARGS(renderTargets[i].GetAddressOf()));
+            hResult = swapChain->GetBuffer(i, IID_PPV_ARGS(renderTargets[i].GetAddressOf()));
+            ThrowIfFailed(hResult);
             rtvHandles[i] = rtvHandleStart;
             rtvHandles[i].ptr += SIZE_T(i) * SIZE_T(rtvDescriptorSize);
             device->CreateRenderTargetView(renderTargets[i].Get(), nullptr, rtvHandles[i]);
@@ -246,13 +273,15 @@ int main()
         depthBufferClearValue.Format = DXGI_FORMAT_D32_FLOAT;
         depthBufferClearValue.DepthStencil.Depth = 1.0f;  // far plane distance
         Microsoft::WRL::ComPtr<ID3D12Resource> depthBuffer;
-        device->CreateCommittedResource(&depthBufferHeapProperties, D3D12_HEAP_FLAG_NONE, &depthBufferDesc, D3D12_RESOURCE_STATE_DEPTH_WRITE, &depthBufferClearValue, IID_PPV_ARGS(depthBuffer.GetAddressOf()));
+        hResult = device->CreateCommittedResource(&depthBufferHeapProperties, D3D12_HEAP_FLAG_NONE, &depthBufferDesc, D3D12_RESOURCE_STATE_DEPTH_WRITE, &depthBufferClearValue, IID_PPV_ARGS(depthBuffer.GetAddressOf()));
+        ThrowIfFailed(hResult);
         // create depth stencil view (DSV)
         D3D12_DESCRIPTOR_HEAP_DESC dsvHeapDesc{};
         dsvHeapDesc.NumDescriptors = 1;
         dsvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
         Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> dsvHeap;
-        device->CreateDescriptorHeap(&dsvHeapDesc, IID_PPV_ARGS(dsvHeap.GetAddressOf()));
+        hResult = device->CreateDescriptorHeap(&dsvHeapDesc, IID_PPV_ARGS(dsvHeap.GetAddressOf()));
+        ThrowIfFailed(hResult);
         D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle = dsvHeap->GetCPUDescriptorHandleForHeapStart();
         device->CreateDepthStencilView(depthBuffer.Get(), nullptr, dsvHandle);
 
@@ -309,9 +338,11 @@ int main()
         resourceDesc.SampleDesc.Count = 1;
         resourceDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
         Microsoft::WRL::ComPtr<ID3D12Resource> vertexBuffer;
-        device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE, &resourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(vertexBuffer.GetAddressOf()));
+        hResult = device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE, &resourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(vertexBuffer.GetAddressOf()));
+        ThrowIfFailed(hResult);
         void* vertexData;
-        vertexBuffer->Map(0, nullptr, &vertexData);
+        hResult = vertexBuffer->Map(0, nullptr, &vertexData);
+        ThrowIfFailed(hResult);
         std::memcpy(vertexData, vertices, sizeof(vertices));
         vertexBuffer->Unmap(0, nullptr);
         D3D12_VERTEX_BUFFER_VIEW vertexBufferView{};
@@ -322,9 +353,11 @@ int main()
         // create index buffer
         resourceDesc.Width = sizeof(indices);
         Microsoft::WRL::ComPtr<ID3D12Resource> indexBuffer;
-        device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE, &resourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(indexBuffer.GetAddressOf()));
+        hResult = device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE, &resourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(indexBuffer.GetAddressOf()));
+        ThrowIfFailed(hResult);
         void* indexData;
-        indexBuffer->Map(0, nullptr, &indexData);
+        hResult = indexBuffer->Map(0, nullptr, &indexData);
+        ThrowIfFailed(hResult);
         std::memcpy(indexData, indices, sizeof(indices));
         indexBuffer->Unmap(0, nullptr);
         D3D12_INDEX_BUFFER_VIEW indexBufferView{};
@@ -341,13 +374,16 @@ int main()
             {
                 // being here means the last frame the GPU has finished rendering was not the current frame
                 // i.e. the current frame is still in the process of being renderered
-                fence->SetEventOnCompletion(fenceValues[currentBackBufferIndex], currentFrameFenceEvent);
+                hResult = fence->SetEventOnCompletion(fenceValues[currentBackBufferIndex], currentFrameFenceEvent);
+                ThrowIfFailed(hResult);
                 WaitForSingleObject(currentFrameFenceEvent, INFINITE);
             }
 
             // reset command allocator and command list
-            commandAllocators[currentBackBufferIndex]->Reset();
-            commandLists[currentBackBufferIndex]->Reset(commandAllocators[currentBackBufferIndex].Get(), nullptr);
+            hResult = commandAllocators[currentBackBufferIndex]->Reset();
+            ThrowIfFailed(hResult);
+            hResult = commandLists[currentBackBufferIndex]->Reset(commandAllocators[currentBackBufferIndex].Get(), nullptr);
+            ThrowIfFailed(hResult);
 
             // calculate MVP matrices
             static float rotation = 0.0f;
@@ -407,18 +443,21 @@ int main()
             barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
             commandLists[currentBackBufferIndex]->ResourceBarrier(1, &barrier);
 
-            commandLists[currentBackBufferIndex]->Close();
+            hResult = commandLists[currentBackBufferIndex]->Close();
+            ThrowIfFailed(hResult);
 
             // execute
             ID3D12CommandList* currentFrameCommandList[] = {commandLists[currentBackBufferIndex].Get()};
             commandQueue->ExecuteCommandLists(1, currentFrameCommandList);
 
             // present
-            swapChain->Present(1, 0);
+            hResult = swapChain->Present(1, 0);
+            ThrowIfFailed(hResult);
 
             // wait for previous frame to finish rendering
             const UINT64 fenceValue = currentFrameFenceValue++;  // think fenceValue = currentFrameNumber
-            commandQueue->Signal(fence.Get(), fenceValue);  // tell GPU to set fence = currentFrameNumber when the GPU is finished rendering the currently rendered frame
+            hResult = commandQueue->Signal(fence.Get(), fenceValue);  // tell GPU to set fence = currentFrameNumber when the GPU is finished rendering the currently rendered frame
+            ThrowIfFailed(hResult);
             fenceValues[currentBackBufferIndex] = fenceValue;
         }
 
