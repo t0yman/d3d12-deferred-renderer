@@ -56,9 +56,13 @@ int main()
 
         // enable debug layer
         // catches mistakes with detailed error messages
+#if defined(_DEBUG)
         Microsoft::WRL::ComPtr<ID3D12Debug> debugController;
-        D3D12GetDebugInterface(IID_PPV_ARGS(debugController.GetAddressOf()));
-        debugController->EnableDebugLayer();
+        if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(debugController.GetAddressOf()))))
+        {
+            debugController->EnableDebugLayer();
+        }
+#endif
 
         // create device
         // represents GPU
@@ -145,7 +149,7 @@ int main()
         // create swap chain
         // represents back buffers. manages the buffers you render to.
         DXGI_SWAP_CHAIN_DESC1 swapChainDesc{};
-        swapChainDesc.BufferCount = 2;  // double buffering
+        swapChainDesc.BufferCount = 3;  // triple buffering
         swapChainDesc.Width = windowWidth;
         swapChainDesc.Height = windowHeight;
         swapChainDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -159,24 +163,65 @@ int main()
         Microsoft::WRL::ComPtr<IDXGISwapChain3> swapChain;
         swapChain1.As(&swapChain);
 
-        // create render target views (RTVs)
-        // a descriptor is metadata that tells the GPU how to interpret its resources
-        // the resource is raw memory
-        // first create descriptor heap (array of descriptors) to hold RTVs
+        // setup per-frame resources
+        // maintain one set of GPU recording state per swapchain buffer so the CPU can keep perparing frame N+1 while the GPU finishes frame N
+        // 3 frames in flight for smoother frame pacing
+        static constexpr UINT kNumFrames = 3;
+        // create command allocator / command list per frame
+        Microsoft::WRL::ComPtr<ID3D12CommandAllocator> commandAllocators[kNumFrames];
+        Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> commandLists[kNumFrames];
+        for (UINT i = 0; i < kNumFrames; ++i)
+        {
+            device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(commandAllocators[i].GetAddressOf()));
+            device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, commandAllocators[i].Get(), nullptr, IID_PPV_ARGS(commandLists[i].GetAddressOf()));
+            commandLists[i]->Close();
+        }
+        // maintain a single fence + per-frame fence values
+        Microsoft::WRL::ComPtr<ID3D12Fence> fence;
+        UINT64 fenceValues[kNumFrames];
+        UINT64 currentFrameFenceValue = 0;
+        HANDLE currentFrameFenceEvent = nullptr;
+        device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(fence.GetAddressOf()));
+        currentFrameFenceValue = 1;
+        currentFrameFenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+        // maintain per-frame constant buffers (persistently mapped)
+        // think of constant buffers as uniform variable that we plan on uploading to the shader
+        Microsoft::WRL::ComPtr<ID3D12Resource> constantBuffers[kNumFrames];
+        void* constantBuffersMappedMemory[kNumFrames] = {};
+        D3D12_HEAP_PROPERTIES constantBufferHeapProps{};
+        constantBufferHeapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
+        D3D12_RESOURCE_DESC constantBufferResourceDesc{};
+        constantBufferResourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        constantBufferResourceDesc.Width = (sizeof(ConstantBuffer) + 255) & ~255;
+        constantBufferResourceDesc.Height = 1;
+        constantBufferResourceDesc.DepthOrArraySize = 1;
+        constantBufferResourceDesc.MipLevels = 1;
+        constantBufferResourceDesc.SampleDesc.Count = 1;
+        constantBufferResourceDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        for (UINT i = 0; i < kNumFrames; ++i)
+        {
+            device->CreateCommittedResource(&constantBufferHeapProps, D3D12_HEAP_FLAG_NONE, &constantBufferResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(constantBuffers[i].GetAddressOf()));
+        }
+        // create render target views (RTV)
+        // a desciptor is simply metadata that tells the GPU how to interpret a resource
+        // a resource is simply raw GPU memory
+        // first we create the descriptor heap (an array of descriptors) to hold descriptors to resources
         D3D12_DESCRIPTOR_HEAP_DESC rtvHeapDesc{};
-        rtvHeapDesc.NumDescriptors = 2;  // one per back buffer
+        rtvHeapDesc.NumDescriptors = kNumFrames;
         rtvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
         Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> rtvHeap;
         device->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(rtvHeap.GetAddressOf()));
-        // next create an RTV for each back buffer
+        // next create and maintain a descriptor for each back buffer
         UINT rtvDescriptorSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
-        D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = rtvHeap->GetCPUDescriptorHandleForHeapStart();
-        Microsoft::WRL::ComPtr<ID3D12Resource> renderTargets[2];
-        for (UINT i = 0; i < 2; ++i)
+        D3D12_CPU_DESCRIPTOR_HANDLE rtvHandles[kNumFrames];
+        D3D12_CPU_DESCRIPTOR_HANDLE rtvHandleStart = rtvHeap->GetCPUDescriptorHandleForHeapStart();
+        Microsoft::WRL::ComPtr<ID3D12Resource> renderTargets[kNumFrames];
+        for (UINT i = 0; i < kNumFrames; ++i)
         {
             swapChain->GetBuffer(i, IID_PPV_ARGS(renderTargets[i].GetAddressOf()));
-            device->CreateRenderTargetView(renderTargets[i].Get(), nullptr, rtvHandle);
-            rtvHandle.ptr += rtvDescriptorSize;
+            rtvHandles[i] = rtvHandleStart;
+            rtvHandles[i].ptr += SIZE_T(i) * SIZE_T(rtvDescriptorSize);
+            device->CreateRenderTargetView(renderTargets[i].Get(), nullptr, rtvHandles[i]);
         }
 
         // create depth buffer
@@ -204,25 +249,6 @@ int main()
         device->CreateDescriptorHeap(&dsvHeapDesc, IID_PPV_ARGS(dsvHeap.GetAddressOf()));
         D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle = dsvHeap->GetCPUDescriptorHandleForHeapStart();
         device->CreateDepthStencilView(depthBuffer.Get(), nullptr, dsvHandle);
-
-        // create command allocator
-        // represents memory pool for command lists
-        Microsoft::WRL::ComPtr<ID3D12CommandAllocator> commandAllocator;
-        device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(commandAllocator.GetAddressOf()));
-
-        // create command list
-        // represents the queue you record commands to
-        Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> commandList;
-        device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, commandAllocator.Get(), nullptr, IID_PPV_ARGS(commandList.GetAddressOf()));
-        commandList->Close();  // ensure commandList created in recording state by closing it for now
-
-        // create fence
-        // represents the number of the current frame being renderered
-        // used for CPU/GPU synchronization
-        Microsoft::WRL::ComPtr<ID3D12Fence> fence;
-        device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(fence.GetAddressOf()));
-        UINT64 fenceValue = 0;
-        HANDLE fenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
 
         Vertex vertices[] = {
             // Front face
@@ -280,7 +306,7 @@ int main()
         device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE, &resourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(vertexBuffer.GetAddressOf()));
         void* vertexData;
         vertexBuffer->Map(0, nullptr, &vertexData);
-        std::memcpy(vertexData, vertices, sizeof(vertices));
+        std::memcpy(vertexData, &vertices, sizeof(vertices));
         vertexBuffer->Unmap(0, nullptr);
         D3D12_VERTEX_BUFFER_VIEW vertexBufferView{};
         vertexBufferView.BufferLocation = vertexBuffer->GetGPUVirtualAddress();
@@ -300,27 +326,15 @@ int main()
         indexBufferView.SizeInBytes = sizeof(indices);
         indexBufferView.Format = DXGI_FORMAT_R16_UINT;
 
-        // create constant buffer (think of it as uniform variable we are planning on uploading to the shader)
-        D3D12_HEAP_PROPERTIES constantBufferProps{};
-        constantBufferProps.Type = D3D12_HEAP_TYPE_UPLOAD;
-        D3D12_RESOURCE_DESC constantBufferResourceDesc{};
-        constantBufferResourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-        constantBufferResourceDesc.Width = (sizeof(ConstantBuffer) + 255) & ~255;
-        constantBufferResourceDesc.Height = 1;
-        constantBufferResourceDesc.DepthOrArraySize = 1;
-        constantBufferResourceDesc.MipLevels = 1;
-        constantBufferResourceDesc.SampleDesc.Count = 1;
-        constantBufferResourceDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        Microsoft::WRL::ComPtr<ID3D12Resource> constantBuffer;
-        device->CreateCommittedResource(&constantBufferProps, D3D12_HEAP_FLAG_NONE, &constantBufferResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(constantBuffer.GetAddressOf()));
-
         while (!glfwWindowShouldClose(window))
         {
             glfwPollEvents();
 
-            // resent allocator and command list
-            commandAllocator->Reset();
-            commandList->Reset(commandAllocator.Get(), nullptr);
+            const UINT currentBackBufferIndex = swapChain->GetCurrentBackBufferIndex();
+
+            // reset command allocator and command list
+            commandAllocators[currentBackBufferIndex]->Reset();
+            commandLists[currentBackBufferIndex]->Reset(commandAllocators[currentBackBufferIndex].Get(), nullptr);
 
             // calculate MVP matrices
             static float rotation = 0.0f;
@@ -338,73 +352,65 @@ int main()
                 100.0f
             );
 
-            // update constant buffer with transposed matrices
+            // update frame's constant buffer with transposed matrices
             // HLSL expects matrices in column-major ordering
             ConstantBuffer currentFrameConstantBuffer;
             currentFrameConstantBuffer.model = XMMatrixTranspose(model);
             currentFrameConstantBuffer.view = XMMatrixTranspose(view);
             currentFrameConstantBuffer.projection = XMMatrixTranspose(projection);
-            void* constantBufferData;
-            constantBuffer->Map(0, nullptr, &constantBufferData);
-            std::memcpy(constantBufferData, &currentFrameConstantBuffer, sizeof(currentFrameConstantBuffer));
-            constantBuffer->Unmap(0, nullptr);
-
-            // get current back buffer
-            UINT frameIndex = swapChain->GetCurrentBackBufferIndex();
-            ID3D12Resource* backBuffer = renderTargets[frameIndex].Get();
+            constantBuffers[currentBackBufferIndex]->Map(0, nullptr, &(constantBuffersMappedMemory[currentBackBufferIndex]));
+            std::memcpy(constantBuffersMappedMemory[currentBackBufferIndex], &currentFrameConstantBuffer, sizeof(currentFrameConstantBuffer));
+            constantBuffers[currentBackBufferIndex]->Unmap(0, nullptr);
 
             // transition to render target
             D3D12_RESOURCE_BARRIER barrier{};
             barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-            barrier.Transition.pResource = backBuffer;
+            barrier.Transition.pResource = renderTargets[currentBackBufferIndex].Get();
             barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
             barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
-            commandList->ResourceBarrier(1, &barrier);
+            commandLists[currentBackBufferIndex]->ResourceBarrier(1, &barrier);
 
             // clear to cornflower blue
-            D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = rtvHeap->GetCPUDescriptorHandleForHeapStart();
-            rtvHandle.ptr += frameIndex * rtvDescriptorSize;
             float clearColor[] = {0.39f, 0.58f, 0.93f, 1.0f};
-            commandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
-            commandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+            commandLists[currentBackBufferIndex]->ClearRenderTargetView(rtvHandles[currentBackBufferIndex], clearColor, 0, nullptr);
+            commandLists[currentBackBufferIndex]->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
 
             // set pipeline and draw
-            commandList->SetPipelineState(pipelineState.Get());
-            commandList->SetGraphicsRootSignature(rootSignature.Get());
-            commandList->SetGraphicsRootConstantBufferView(0, constantBuffer->GetGPUVirtualAddress());
-            commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            commandLists[currentBackBufferIndex]->SetPipelineState(pipelineState.Get());
+            commandLists[currentBackBufferIndex]->SetGraphicsRootSignature(rootSignature.Get());
+            commandLists[currentBackBufferIndex]->SetGraphicsRootConstantBufferView(0, constantBuffers[currentBackBufferIndex]->GetGPUVirtualAddress());
+            commandLists[currentBackBufferIndex]->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             D3D12_VIEWPORT viewport{0.0f, 0.0f, static_cast<float>(windowWidth), static_cast<float>(windowHeight), 0.0f, 1.0f};
             RECT scissorRect{0, 0, windowWidth, windowHeight};
-            commandList->RSSetViewports(1, &viewport);
-            commandList->RSSetScissorRects(1, &scissorRect);
-            commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, &dsvHandle);
-            commandList->IASetVertexBuffers(0, 1, &vertexBufferView);
-            commandList->IASetIndexBuffer(&indexBufferView);
-            commandList->DrawIndexedInstanced(36, 1, 0, 0, 0);
+            commandLists[currentBackBufferIndex]->RSSetViewports(1, &viewport);
+            commandLists[currentBackBufferIndex]->RSSetScissorRects(1, &scissorRect);
+            commandLists[currentBackBufferIndex]->OMSetRenderTargets(1, &(rtvHandles[currentBackBufferIndex]), FALSE, &dsvHandle);
+            commandLists[currentBackBufferIndex]->IASetVertexBuffers(0, 1, &vertexBufferView);
+            commandLists[currentBackBufferIndex]->IASetIndexBuffer(&indexBufferView);
+            commandLists[currentBackBufferIndex]->DrawIndexedInstanced(36, 1, 0, 0, 0);
 
             // transition to present buffer
             barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
             barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
-            commandList->ResourceBarrier(1, &barrier);
+            commandLists[currentBackBufferIndex]->ResourceBarrier(1, &barrier);
 
-            commandList->Close();
+            commandLists[currentBackBufferIndex]->Close();
 
             // execute
-            ID3D12CommandList* commandLists[] = {commandList.Get()};
-            commandQueue->ExecuteCommandLists(1, commandLists);
+            ID3D12CommandList* currentFrameCommandList[] = {commandLists[currentBackBufferIndex].Get()};
+            commandQueue->ExecuteCommandLists(1, currentFrameCommandList);
 
             // present
             swapChain->Present(1, 0);
 
-            // wait for previous frame to finish rendering
-            const UINT64 currentFenceValue = fenceValue;
-            commandQueue->Signal(fence.Get(), currentFenceValue);  // tell GPU to set a fence value to currentFenceValue upon completion of rendering current frame
-            ++fenceValue;  // increment CPU's fenceValue to indicate rendering of next frame
-            if (fence->GetCompletedValue() < fenceValue)  // is the GPU still drawing the previous frame?
+            const UINT64 fenceValue = currentFrameFenceValue++;
+            commandQueue->Signal(fence.Get(), fenceValue);
+            if (fence->GetCompletedValue() < fenceValue)
             {
-                fence->SetEventOnCompletion(currentFenceValue, fenceEvent);  // wait for fence to reach currentFenceValue
-                WaitForSingleObject(fenceEvent, INFINITE);
+                fence->SetEventOnCompletion(fenceValue, currentFrameFenceEvent);
+                WaitForSingleObject(currentFrameFenceEvent, INFINITE);
             }
+            fenceValues[currentBackBufferIndex] = fenceValue;
         }
 
         glfwDestroyWindow(window);
