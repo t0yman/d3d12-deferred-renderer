@@ -1,6 +1,10 @@
 #include <iostream>
 #include <exception>
 #include <stdexcept>
+#include <string>
+#include <map>
+#include <utility>
+#include <vector>
 
 #include <d3d12.h>
 #include <d3dcompiler.h>
@@ -14,12 +18,21 @@
 
 #include <wrl/client.h>
 
+#define TINYOBJLOADER_IMPLEMENTATION
+#include <tiny_obj_loader.h>
+
 using namespace DirectX;
 
 struct Vertex
 {
     XMFLOAT3 position;
     XMFLOAT3 normal;
+};
+
+struct Mesh
+{
+    std::vector<Vertex> vertices;
+    std::vector<std::uint16_t> indices;
 };
 
 struct MvpInfo
@@ -80,46 +93,7 @@ static UINT frameIndex = 1;
 static HANDLE fenceEvent;
 static UINT64 fenceValues[numBackBuffers] = {};
 
-static Vertex vertices[] = {
-    // front face
-    {{-0.5f, -0.5f,  0.5f}, {0.0f, 0.0f, 1.0f}},
-    {{ 0.5f, -0.5f,  0.5f}, {0.0f, 0.0f, 1.0f}},
-    {{ 0.5f,  0.5f,  0.5f}, {0.0f, 0.0f, 1.0f}},
-    {{-0.5f,  0.5f,  0.5f}, {0.0f, 0.0f, 1.0f}},
-    // back face
-    {{ 0.5f, -0.5f, -0.5f}, {0.0f, 0.0f, -1.0f}},
-    {{-0.5f, -0.5f, -0.5f}, {0.0f, 0.0f, -1.0f}},
-    {{-0.5f,  0.5f, -0.5f}, {0.0f, 0.0f, -1.0f}},
-    {{ 0.5f,  0.5f, -0.5f}, {0.0f, 0.0f, -1.0f}},
-    // top face
-    {{-0.5f,  0.5f,  0.5f}, {0.0f, 1.0f, 0.0f}},
-    {{ 0.5f,  0.5f,  0.5f}, {0.0f, 1.0f, 0.0f}},
-    {{ 0.5f,  0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
-    {{-0.5f,  0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
-    // bottom face
-    {{-0.5f, -0.5f, -0.5f}, {0.0f, -1.0f, 0.0f}},
-    {{ 0.5f, -0.5f, -0.5f}, {0.0f, -1.0f, 0.0f}},
-    {{ 0.5f, -0.5f,  0.5f}, {0.0f, -1.0f, 0.0f}},
-    {{-0.5f, -0.5f,  0.5f}, {0.0f, -1.0f, 0.0f}},
-    // right face
-    {{ 0.5f, -0.5f,  0.5f}, {1.0f, 0.0f, 0.0f}},
-    {{ 0.5f, -0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
-    {{ 0.5f,  0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
-    {{ 0.5f,  0.5f,  0.5f}, {1.0f, 0.0f, 0.0f}},
-    // left face
-    {{-0.5f, -0.5f, -0.5f}, {-1.0f, 0.0f, 0.0f}},
-    {{-0.5f, -0.5f,  0.5f}, {-1.0f, 0.0f, 0.0f}},
-    {{-0.5f,  0.5f,  0.5f}, {-1.0f, 0.0f, 0.0f}},
-    {{-0.5f,  0.5f, -0.5f}, {-1.0f, 0.0f, 0.0f}},
-};
-static std::uint16_t indices[] = {
-    0,1,2, 0,2,3,       // front
-    4,5,6, 4,6,7,       // back
-    8,9,10, 8,10,11,    // top
-    12,13,14, 12,14,15, // bottom
-    16,17,18, 16,18,19, // right
-    20,21,22, 20,22,23  // left
-};
+static Mesh mesh{};
 static Microsoft::WRL::ComPtr<ID3D12Resource> vertexBuffer;
 static Microsoft::WRL::ComPtr<ID3D12Resource> indexBuffer;
 static D3D12_VERTEX_BUFFER_VIEW vertexBufferView{};
@@ -134,6 +108,7 @@ inline static void ThrowIfFailed(HRESULT hResult);
 
 static void LoadPipeline(HWND hWnd);
 static void LoadAssets();
+static void LoadObjFile(const std::string& fllename);
 
 int main()
 {
@@ -224,7 +199,7 @@ int main()
             commandLists[currentFrameIndex]->SetGraphicsRootSignature(geometryRootSignature.Get());
             commandLists[currentFrameIndex]->SetGraphicsRootConstantBufferView(0, mvpInfoBuffers[currentFrameIndex]->GetGPUVirtualAddress());
             commandLists[currentFrameIndex]->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-            commandLists[currentFrameIndex]->DrawIndexedInstanced(36, 1, 0, 0, 0);
+            commandLists[currentFrameIndex]->DrawIndexedInstanced((mesh.indices).size(), 1, 0, 0, 0);
 
 
             // transition barriers to prepare for lighting pass
@@ -775,13 +750,16 @@ static void LoadPipeline(HWND hWnd)
 
 static void LoadAssets()
 {
+    // load OBJ mesh
+    LoadObjFile("../assets/models/pyramid.obj");
+
     // create vertex buffer
     D3D12_HEAP_PROPERTIES vertexBufferHeapProperties{};
     vertexBufferHeapProperties.Type = D3D12_HEAP_TYPE_UPLOAD;
 
     D3D12_RESOURCE_DESC vertexBufferResourceDesc{};
     vertexBufferResourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-    vertexBufferResourceDesc.Width = sizeof(vertices);
+    vertexBufferResourceDesc.Width = (mesh.vertices).size() * sizeof(Vertex);
     vertexBufferResourceDesc.Height = 1;
     vertexBufferResourceDesc.DepthOrArraySize = 1;
     vertexBufferResourceDesc.MipLevels = 1;
@@ -792,13 +770,13 @@ static void LoadAssets()
     
     void* vertexBufferMappedMemory;
     ThrowIfFailed(vertexBuffer->Map(0, nullptr, &vertexBufferMappedMemory));
-    std::memcpy(vertexBufferMappedMemory, vertices, sizeof(vertices));
+    std::memcpy(vertexBufferMappedMemory, (mesh.vertices).data(), (mesh.vertices).size() * sizeof(Vertex));
     
     vertexBuffer->Unmap(0, nullptr);
 
     vertexBufferView.BufferLocation = vertexBuffer->GetGPUVirtualAddress();
     vertexBufferView.StrideInBytes = sizeof(Vertex);
-    vertexBufferView.SizeInBytes = sizeof(vertices);
+    vertexBufferView.SizeInBytes = (mesh.vertices).size() * sizeof(Vertex);
 
     // create index buffer
     D3D12_HEAP_PROPERTIES indexBufferHeapProperties{};
@@ -806,7 +784,7 @@ static void LoadAssets()
 
     D3D12_RESOURCE_DESC indexBufferResourceDesc{};
     indexBufferResourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-    indexBufferResourceDesc.Width = sizeof(indices);
+    indexBufferResourceDesc.Width = (mesh.indices).size() * sizeof(std::uint16_t);
     indexBufferResourceDesc.Height = 1;
     indexBufferResourceDesc.DepthOrArraySize = 1;
     indexBufferResourceDesc.MipLevels = 1;
@@ -817,11 +795,95 @@ static void LoadAssets()
     
     void* indexBufferMappedMemory;
     ThrowIfFailed(indexBuffer->Map(0, nullptr, &indexBufferMappedMemory));
-    std::memcpy(indexBufferMappedMemory, indices, sizeof(indices));
+    std::memcpy(indexBufferMappedMemory, (mesh.indices).data(), (mesh.indices).size() * sizeof(std::uint16_t));
 
     indexBuffer->Unmap(0, nullptr);
 
     indexBufferView.BufferLocation = indexBuffer->GetGPUVirtualAddress();
-    indexBufferView.SizeInBytes = sizeof(indices);
+    indexBufferView.SizeInBytes = (mesh.indices).size() * sizeof(std::uint16_t);
     indexBufferView.Format = DXGI_FORMAT_R16_UINT;
+}
+
+static void LoadObjFile(const std::string& filename)
+{
+    tinyobj::ObjReaderConfig objReaderConfig{};
+    tinyobj::ObjReader objReader{};
+    if (!objReader.ParseFromFile(filename, objReaderConfig))
+    {
+        if (!(objReader.Error()).empty())
+        {
+            std::cerr << objReader.Error();
+        }
+        throw std::runtime_error{"failed to load OBJ file"};
+    }
+
+    if (!(objReader.Warning()).empty())
+    {
+        std::cerr << objReader.Warning();
+    }
+
+    tinyobj::attrib_t meshAttributes = objReader.GetAttrib();
+    std::vector<tinyobj::shape_t> meshShapes = objReader.GetShapes();
+
+    std::vector<XMFLOAT3> positions;
+    std::vector<XMFLOAT3> normals;
+
+    std::vector<Vertex> vertices;
+    std::vector<std::uint16_t> indices;
+
+    std::map<std::pair<std::size_t, std::size_t>, std::size_t> objVertexToCustomVertexIndex;
+
+    for (const tinyobj::shape_t& shape : meshShapes)
+    {
+        std::size_t offset = 0;
+        for (std::size_t faceIndex = 0; faceIndex < (shape.mesh.num_face_vertices).size(); ++faceIndex)
+        {
+            for (std::size_t vertexIndex = 0; vertexIndex < static_cast<std::size_t>((shape.mesh.num_face_vertices)[faceIndex]); ++vertexIndex)
+            {
+                tinyobj::index_t index = (shape.mesh).indices[offset + vertexIndex];
+
+                std::pair<std::size_t, std::size_t> indexPair{};
+                indexPair.first = index.vertex_index;
+                indexPair.second = index.normal_index;
+                const auto& itr = objVertexToCustomVertexIndex.find(indexPair);
+                if (itr != objVertexToCustomVertexIndex.end())
+                {
+                    (mesh.indices).push_back(static_cast<std::uint16_t>(itr->second));
+                    continue;
+                }
+
+                Vertex vertex{};
+
+                tinyobj::real_t x = meshAttributes.vertices[3 * static_cast<std::size_t>(index.vertex_index) + 0];
+                tinyobj::real_t y = meshAttributes.vertices[3 * static_cast<std::size_t>(index.vertex_index) + 1];
+                tinyobj::real_t z = meshAttributes.vertices[3 * static_cast<std::size_t>(index.vertex_index) + 2];
+
+                vertex.position = XMFLOAT3{static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)};
+
+                if (index.normal_index >= 0)
+                {
+                    tinyobj::real_t nx = meshAttributes.normals[3 * static_cast<std::size_t>(index.normal_index) + 0];
+                    tinyobj::real_t ny = meshAttributes.normals[3 * static_cast<std::size_t>(index.normal_index) + 1];
+                    tinyobj::real_t nz = meshAttributes.normals[3 * static_cast<std::size_t>(index.normal_index) + 2];
+
+                    vertex.normal = XMFLOAT3{static_cast<float>(nx), static_cast<float>(ny), static_cast<float>(nz)};
+                }
+                if (index.texcoord_index >= 0)
+                {
+                    tinyobj::real_t u = meshAttributes.texcoords[2 * static_cast<std::size_t>(index.texcoord_index) + 0];
+                    tinyobj::real_t v = meshAttributes.texcoords[2 * static_cast<std::size_t>(index.texcoord_index) + 1];
+
+                    // todo: 
+                }
+
+                objVertexToCustomVertexIndex[indexPair] = (mesh.vertices).size();
+
+                (mesh.indices).push_back(static_cast<std::uint16_t>((mesh.vertices).size()));
+                (mesh.vertices).push_back(vertex);
+            }
+            offset += static_cast<std::size_t>((shape.mesh.num_face_vertices)[faceIndex]);
+        }
+    }
+
+
 }
