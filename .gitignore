@@ -24,6 +24,9 @@ install_manifest.txt
 *.out
 *.app
 
+# allow .obj model files in assets
+!/assets/**/*.obj
+
 # Debug files
 *.pdb
 *.ilk
