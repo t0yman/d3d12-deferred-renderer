@@ -825,12 +825,6 @@ static void LoadObjFile(const std::string& filename)
     tinyobj::attrib_t meshAttributes = objReader.GetAttrib();
     std::vector<tinyobj::shape_t> meshShapes = objReader.GetShapes();
 
-    std::vector<XMFLOAT3> positions;
-    std::vector<XMFLOAT3> normals;
-
-    std::vector<Vertex> vertices;
-    std::vector<std::uint16_t> indices;
-
     std::map<std::pair<std::size_t, std::size_t>, std::size_t> objVertexToCustomVertexIndex;
 
     for (const tinyobj::shape_t& shape : meshShapes)
