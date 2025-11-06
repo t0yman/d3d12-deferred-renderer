@@ -2,7 +2,7 @@
 #include <exception>
 #include <stdexcept>
 #include <string>
-#include <map>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -21,10 +21,14 @@
 #define TINYOBJLOADER_IMPLEMENTATION
 #include <tiny_obj_loader.h>
 
+#define STB_IMAGE_IMPLEMENTATION
+#include <stb_image.h>
+
 struct Vertex
 {
     DirectX::XMFLOAT3 position;
     DirectX::XMFLOAT3 normal;
+    DirectX::XMFLOAT2 uv;
 };
 
 struct Transform
@@ -50,6 +54,8 @@ struct RenderableMeshDesc
     
     UINT constantBufferOffset;
 
+    
+
     Transform transform;
 };
 
@@ -58,6 +64,7 @@ struct GeometryConstantBuffer
     DirectX::XMFLOAT4X4 modelMatrix;
     DirectX::XMFLOAT4X4 viewMatrix;
     DirectX::XMFLOAT4X4 projectionMatrix;
+    
 };
 
 struct LightingConstantBuffer
@@ -85,7 +92,7 @@ static constexpr D3D12_RECT scissorRect{0, 0, windowWidth, windowHeight};
 static Microsoft::WRL::ComPtr<ID3D12Device> device;
 static Microsoft::WRL::ComPtr<ID3D12CommandQueue> commandQueue;
 static Microsoft::WRL::ComPtr<ID3D12CommandAllocator> commandAllocators[numBackBuffers] = {};
-static Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList1> commandLists[numBackBuffers] = {};
+static Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> commandLists[numBackBuffers] = {};
 static Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> rtvDescriptorHeap;
 static Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> dsvDescriptorHeap;
 static Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> srvDescriptorHeap;
@@ -193,6 +200,7 @@ int main()
             // calculate orientation for each renderable mesh
             static float time = 0.0f;
             time += 0.01f;
+            time = std::fmodf(time, DirectX::XM_2PI);
             for (RenderableMeshDesc& renderableMeshDesc : renderableMeshDescs)
             {
                 renderableMeshDesc.transform.orientation.y = time;
@@ -231,6 +239,15 @@ int main()
 
                 commandLists[currentBackBufferIndex]->DrawIndexedInstanced(renderableMeshDesc.numIndices, 1, renderableMeshDesc.indexBufferOffset, renderableMeshDesc.vertexBufferOffset, 0);
             }
+
+            // upload lighting constant buffer to lighting shader
+            LightingConstantBuffer lightingConstantBuffer{};
+            lightingConstantBuffer.lightDirection = DirectX::XMFLOAT3{-0.3f, -0.2f, -1.0f};
+            lightingConstantBuffer.pad0 = 0.0f;
+            lightingConstantBuffer.lightColor = DirectX::XMFLOAT3{1.0f, 1.0f, 1.0f};
+            lightingConstantBuffer.pad1 = 0.0f;
+
+            std::memcpy(lightingConstantBuffersMappedMemory[currentBackBufferIndex], &lightingConstantBuffer, sizeof(LightingConstantBuffer));
 
             // transition barriers to prepare for lighting pass
 
@@ -708,7 +725,7 @@ static void LoadAssets()
     D3D12_RASTERIZER_DESC geometryRasterizerDesc{};
     geometryRasterizerDesc.FillMode = D3D12_FILL_MODE_SOLID;
     geometryRasterizerDesc.CullMode = D3D12_CULL_MODE_BACK;
-    geometryRasterizerDesc.FrontCounterClockwise = FALSE;
+    geometryRasterizerDesc.FrontCounterClockwise = TRUE;
     geometryRasterizerDesc.DepthBias = 0;
     geometryRasterizerDesc.DepthBiasClamp = 0.0f;
     geometryRasterizerDesc.MultisampleEnable = FALSE;
@@ -763,7 +780,7 @@ static void LoadAssets()
     D3D12_RASTERIZER_DESC lightingRasterizerDesc{};
     lightingRasterizerDesc.FillMode = D3D12_FILL_MODE_SOLID;
     lightingRasterizerDesc.CullMode = D3D12_CULL_MODE_NONE;
-    lightingRasterizerDesc.FrontCounterClockwise = FALSE;
+    lightingRasterizerDesc.FrontCounterClockwise = TRUE;
     lightingRasterizerDesc.DepthBias = 0;
     lightingRasterizerDesc.DepthBiasClamp = 0.0f;
     lightingRasterizerDesc.MultisampleEnable = FALSE;
@@ -804,9 +821,9 @@ static void LoadAssets()
 
     ThrowIfFailed(device->CreateGraphicsPipelineState(&lightingPipelineStateDesc, IID_PPV_ARGS(lightingPipelineState.GetAddressOf())));
 
-    LoadObjFile("../assets/models/cube.obj");
-    LoadObjFile("../assets/models/pyramid.obj");
-    LoadObjFile("../assets/models/cube.obj");
+    LoadObjFile("../assets/models/bunny.obj");
+    LoadObjFile("../assets/models/buddha.obj");
+    LoadObjFile("../assets/models/roadBike.obj");
 
     UINT numVertices = 0;
     UINT numIndices = 0;
@@ -899,79 +916,130 @@ static void LoadAssets()
 static void LoadObjFile(const std::string& filename)
 {
     tinyobj::ObjReaderConfig objReaderConfig{};
-    objReaderConfig.triangulate = true;
     tinyobj::ObjReader objReader{};
+
     if (!objReader.ParseFromFile(filename, objReaderConfig))
     {
         if (!(objReader.Error()).empty())
         {
             std::cerr << objReader.Error();
         }
-        throw std::runtime_error{"failed to load OBJ file"};
+        throw std::runtime_error{"failed to read obj file"};
     }
-
     if (!(objReader.Warning()).empty())
     {
-        std::cerr << objReader.Warning();
+        std:: cerr << objReader.Warning();
     }
 
-    tinyobj::attrib_t meshAttributes = objReader.GetAttrib();
-    std::vector<tinyobj::shape_t> meshShapes = objReader.GetShapes();
+    const tinyobj::attrib_t& meshAttributes = objReader.GetAttrib();
+    const std::vector<tinyobj::shape_t>& meshShapes = objReader.GetShapes();
+    const std::vector<tinyobj::material_t>& meshMaterials = objReader.GetMaterials();
 
-    std::map<std::pair<std::size_t, std::size_t>, std::size_t> objVertexToCustomVertexIndex;
+    struct ObjFace
+    {
+        UINT64 vertexIndex;
+        UINT64 normalIndex;
+        UINT64 uvIndex;
+    };
 
-    Mesh mesh;
+    class ObjFaceHash
+    {
+    public:
+        inline UINT64 operator()(const ObjFace& face) const
+        {
+            static constexpr UINT64 primeNumber = 0x9e3779b97f4a7c15;
+
+            UINT64 hash = face.vertexIndex;
+            hash ^= face.normalIndex + primeNumber + (hash << 6) + (hash >> 2);
+            hash ^= face.uvIndex + primeNumber + (hash << 6) + (hash >> 2);
+
+            return Mix(hash);
+        }
+    
+    private:
+        // based on MurmurHash3's finalizer
+        // mixes the bit values in n with random bits
+        // returns a random number based on input n
+        inline UINT64 Mix(UINT64 n) const
+        {
+            n ^= n >> 33;
+            n *= 0xff51afd7ed558ccd;
+            n ^= n >> 33;
+            n *= 0xc4ceb9fe1a85ec53;
+            n ^= n >> 33;
+
+            return n;
+        }
+    };
+
+    std::unordered_map<ObjFace, UINT64, ObjFaceHash> meshVertices{};
+
+    Mesh mesh{};
+    UINT64 numIndices = 0;
+    for (const tinyobj::shape_t& shape : meshShapes)
+    {
+        numIndices += (shape.mesh.indices).size();
+    }
+    (mesh.vertices).reserve(numIndices);
+    (mesh.indices).reserve(numIndices);
 
     for (const tinyobj::shape_t& shape : meshShapes)
     {
-        std::size_t offset = 0;
-        for (std::size_t faceIndex = 0; faceIndex < (shape.mesh.num_face_vertices).size(); ++faceIndex)
+        UINT64 offset = 0;
+        for (UINT64 faceIndex = 0; faceIndex < (shape.mesh.num_face_vertices).size(); ++faceIndex)
         {
-            for (std::size_t vertexIndex = 0; vertexIndex < static_cast<std::size_t>((shape.mesh.num_face_vertices)[faceIndex]); ++vertexIndex)
+            for (UINT64 vertexIndex = 0; vertexIndex < static_cast<UINT64>((shape.mesh.num_face_vertices)[faceIndex]); ++vertexIndex)
             {
-                tinyobj::index_t index = (shape.mesh).indices[offset + vertexIndex];
-
-                std::pair<std::size_t, std::size_t> indexPair{};
-                indexPair.first = index.vertex_index;
-                indexPair.second = index.normal_index;
-                const auto& itr = objVertexToCustomVertexIndex.find(indexPair);
-                if (itr != objVertexToCustomVertexIndex.end())
+                const tinyobj::index_t index = (shape.mesh).indices[offset + vertexIndex];
+                
+                ObjFace face{};
+                face.vertexIndex = static_cast<UINT64>(index.vertex_index);
+                face.normalIndex = static_cast<UINT64>(index.normal_index);
+                face.uvIndex = static_cast<UINT64>(index.texcoord_index);
+                const auto& itr = meshVertices.find(face);
+                if (itr != meshVertices.end())
                 {
+                    // being here means we've encountred a duplicate face
+                    // that is, we've already added the face's vertex values to the meshes.vertices container
+                    // thus, at this point meshes.vertices[itr->second] == faceVertex
+
                     (mesh.indices).push_back(static_cast<UINT>(itr->second));
                     continue;
                 }
 
-                Vertex vertex{};
+                Vertex faceVertex{};
 
-                tinyobj::real_t x = meshAttributes.vertices[3 * static_cast<std::size_t>(index.vertex_index) + 0];
-                tinyobj::real_t y = meshAttributes.vertices[3 * static_cast<std::size_t>(index.vertex_index) + 1];
-                tinyobj::real_t z = meshAttributes.vertices[3 * static_cast<std::size_t>(index.vertex_index) + 2];
+                tinyobj::real_t x = (meshAttributes.vertices)[3 * face.vertexIndex + 0];
+                tinyobj::real_t y = (meshAttributes.vertices)[3 * face.vertexIndex + 1];
+                tinyobj::real_t z = (meshAttributes.vertices)[3 * face.vertexIndex + 2];
 
-                vertex.position = DirectX::XMFLOAT3{static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)};
+                faceVertex.position = DirectX::XMFLOAT3{static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)};
 
-                if (index.normal_index >= 0)
+                if (face.normalIndex >= 0)
                 {
-                    tinyobj::real_t nx = meshAttributes.normals[3 * static_cast<std::size_t>(index.normal_index) + 0];
-                    tinyobj::real_t ny = meshAttributes.normals[3 * static_cast<std::size_t>(index.normal_index) + 1];
-                    tinyobj::real_t nz = meshAttributes.normals[3 * static_cast<std::size_t>(index.normal_index) + 2];
+                    tinyobj::real_t nx = (meshAttributes.normals)[3 * face.normalIndex + 0];
+                    tinyobj::real_t ny = (meshAttributes.normals)[3 * face.normalIndex + 1];
+                    tinyobj::real_t nz = (meshAttributes.normals)[3 * face.normalIndex + 2];
 
-                    vertex.normal = DirectX::XMFLOAT3{static_cast<float>(nx), static_cast<float>(ny), static_cast<float>(nz)};
+                    faceVertex.normal = DirectX::XMFLOAT3{static_cast<float>(nx), static_cast<float>(ny), static_cast<float>(nz)};
                 }
-                if (index.texcoord_index >= 0)
+                if (face.uvIndex >= 0)
                 {
-                    tinyobj::real_t u = meshAttributes.texcoords[2 * static_cast<std::size_t>(index.texcoord_index) + 0];
-                    tinyobj::real_t v = meshAttributes.texcoords[2 * static_cast<std::size_t>(index.texcoord_index) + 1];
+                    tinyobj::real_t u = (meshAttributes.texcoords)[2 * face.uvIndex + 0];
+                    tinyobj::real_t v = (meshAttributes.texcoords)[2 * face.uvIndex + 1];
 
-                    // todo: 
+                    faceVertex.uv = DirectX::XMFLOAT2{static_cast<float>(u), static_cast<float>(v)};
                 }
 
-                objVertexToCustomVertexIndex[indexPair] = (mesh.vertices).size();
+                meshVertices[face] = (mesh.vertices).size();
 
                 (mesh.indices).push_back(static_cast<UINT>((mesh.vertices).size()));
-                (mesh.vertices).push_back(vertex);
+                (mesh.vertices).push_back(faceVertex);
             }
-            offset += static_cast<std::size_t>((shape.mesh.num_face_vertices)[faceIndex]);
+
+            offset += static_cast<UINT64>((shape.mesh.num_face_vertices)[faceIndex]);
         }
     }
+
     meshes.push_back(mesh);
 }
